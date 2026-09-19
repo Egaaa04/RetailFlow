@@ -13,6 +13,7 @@ export interface Product {
   minimum_stock: number;
   expiration_date: string | null;
   status: string;
+  image_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -38,7 +39,7 @@ export const getProducts = async () => {
 };
 
 export const createProduct = async (
-  data: CreateProductData
+  data: FormData
 ) => {
   const response = await api.post(
     "/products",
@@ -50,7 +51,7 @@ export const createProduct = async (
 
 export const updateProduct = async (
   productId: number,
-  data: Partial<CreateProductData>
+  data: FormData
 ) => {
   const response = await api.put(
     `/products/${productId}`,

@@ -173,7 +173,7 @@ function Dashboard() {
 
       </div>
 
-      <div className="dashboard-grid">
+      <div className="dashboard-grid dashboard-stack">
 
         <section className="dashboard-section">
 

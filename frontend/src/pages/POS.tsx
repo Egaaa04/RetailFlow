@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+
+import api from "../services/api";
+
 import {
   createTransaction,
   getPOSProducts,
@@ -13,6 +16,7 @@ interface Product {
   selling_price: number;
   current_stock: number;
   status: string;
+  image_url: string | null;
 }
 
 interface CartItem {
@@ -234,6 +238,20 @@ function POS() {
       );
       return;
     }
+    
+    if (paymentMethod === "cash") {
+    const amount = Number(paymentAmount);
+
+    if (!paymentAmount || amount <= 0) {
+        setError("Jumlah pembayaran harus diisi");
+        return;
+    }
+
+    if (amount < total) {
+        setError("Jumlah pembayaran kurang dari total transaksi");
+        return;
+    }
+    }
 
     try {
       setProcessing(true);
@@ -354,34 +372,52 @@ function POS() {
                     type="button"
                     className="pos-product-card"
                     onClick={() =>
-                      addToCart(product)
+                        addToCart(product)
                     }
                     disabled={
-                      product.current_stock <=
-                      0
+                        product.current_stock <= 0
                     }
-                  >
+                    >
+                    <div className="pos-product-image">
+                        {product.image_url ? (
+                        <img
+                            src={`${api.defaults.baseURL}${product.image_url}`}
+                            alt={product.name}
+                            onError={(event) => {
+                            event.currentTarget.style.display =
+                                "none";
+                            }}
+                        />
+                        ) : (
+                        <div className="pos-product-placeholder">
+                            {product.name
+                            .charAt(0)
+                            .toUpperCase()}
+                        </div>
+                        )}
+                    </div>
+
                     <div>
-                      <strong>
+                        <strong>
                         {product.name}
-                      </strong>
+                        </strong>
                     </div>
 
                     <div>
-                      {product.sku}
+                        {product.sku}
                     </div>
 
                     <div>
-                      {formatRupiah(
+                        {formatRupiah(
                         product.selling_price
-                      )}
+                        )}
                     </div>
 
                     <div>
-                      Stok:{" "}
-                      {product.current_stock}
+                        Stok:{" "}
+                        {product.current_stock}
                     </div>
-                  </button>
+                    </button>
                 )
               )
             )}
@@ -418,6 +454,18 @@ function POS() {
                   key={item.product.id}
                   className="pos-cart-item"
                 >
+                    <div className="pos-cart-item-image">
+                    {item.product.image_url ? (
+                        <img
+                        src={`${api.defaults.baseURL}${item.product.image_url}`}
+                        alt={item.product.name}
+                        />
+                    ) : (
+                        <div className="pos-cart-placeholder">
+                        {item.product.name.charAt(0).toUpperCase()}
+                        </div>
+                    )}
+                    </div>
                   <div>
                     <strong>
                       {item.product.name}

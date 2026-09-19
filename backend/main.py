@@ -1,9 +1,14 @@
-from fastapi import FastAPI, HTTPException, Depends, Request
+import os
+import shutil
+
+
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from pwdlib import PasswordHash
 from sqlalchemy import func, select, text
@@ -35,6 +40,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+UPLOAD_DIR = "uploads/products"
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+app.mount(
+    "/uploads",
+    StaticFiles(directory="uploads"),
+    name="uploads"
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -959,6 +973,9 @@ def get_products(
                     else None
                 ),
                 "status": product.status,
+                "image_url": product.image_url,
+                "created_at": product.created_at.isoformat(),
+                "updated_at": product.updated_at.isoformat(),
             }
             for product in products
         ]
@@ -966,7 +983,18 @@ def get_products(
 
 @app.post("/products")
 def create_product(
-    data: CreateProductRequest,
+    sku: str = Form(...),
+    barcode: str | None = Form(None),
+    name: str = Form(...),
+    category_id: int = Form(...),
+    unit: str = Form(...),
+    purchase_price: float = Form(...),
+    selling_price: float = Form(...),
+    current_stock: int = Form(0),
+    minimum_stock: int = Form(0),
+    expiration_date: date | None = Form(None),
+    status: str = Form("active"),
+    image: UploadFile | None = File(None),
     current_user: dict = Depends(
         require_roles(["owner", "admin"])
     ),
@@ -974,7 +1002,7 @@ def create_product(
 ):
     existing_sku = (
         db.query(Product)
-        .filter(Product.sku == data.sku)
+        .filter(Product.sku == sku)
         .first()
     )
 
@@ -984,10 +1012,10 @@ def create_product(
             detail="SKU sudah digunakan"
         )
 
-    if data.barcode:
+    if barcode:
         existing_barcode = (
             db.query(Product)
-            .filter(Product.barcode == data.barcode)
+            .filter(Product.barcode == barcode)
             .first()
         )
 
@@ -997,7 +1025,7 @@ def create_product(
                 detail="Barcode sudah digunakan"
             )
 
-    category = db.get(Category, data.category_id)
+    category = db.get(Category, category_id)
 
     if category is None:
         raise HTTPException(
@@ -1005,28 +1033,66 @@ def create_product(
             detail="Kategori tidak ditemukan"
         )
 
-    if data.status not in ["active", "inactive"]:
+    if status not in ["active", "inactive"]:
         raise HTTPException(
             status_code=400,
             detail="Status produk tidak valid"
         )
 
     product = Product(
-        sku=data.sku,
-        barcode=data.barcode,
-        name=data.name,
-        category_id=data.category_id,
-        unit=data.unit,
-        purchase_price=data.purchase_price,
-        selling_price=data.selling_price,
-        current_stock=data.current_stock,
-        minimum_stock=data.minimum_stock,
-        expiration_date=data.expiration_date,
-        status=data.status
+        sku=sku,
+        barcode=barcode,
+        name=name,
+        category_id=category_id,
+        unit=unit,
+        purchase_price=purchase_price,
+        selling_price=selling_price,
+        current_stock=current_stock,
+        minimum_stock=minimum_stock,
+        expiration_date=expiration_date,
+        status=status
     )
 
     db.add(product)
     db.flush()
+
+    # Simpan gambar produk jika ada
+    if image is not None:
+        allowed_types = [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+        ]
+
+        if image.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail="Format gambar harus JPG, PNG, atau WEBP"
+            )
+
+        extension_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp"
+        }
+
+        extension = extension_map[image.content_type]
+
+        filename = f"{product.id}{extension}"
+        file_path = os.path.join(
+            UPLOAD_DIR,
+            filename
+        )
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(
+                image.file,
+                buffer
+            )
+
+        product.image_url = (
+            f"/uploads/products/{filename}"
+        )
 
     create_audit_log(
         session=db,
@@ -1046,14 +1112,25 @@ def create_product(
         "product": {
             "id": product.id,
             "sku": product.sku,
-            "name": product.name
+            "name": product.name,
+            "image_url": product.image_url
         }
     }
 
 @app.put("/products/{product_id}")
 def update_product(
     product_id: int,
-    data: UpdateProductRequest,
+    sku: str | None = Form(None),
+    barcode: str | None = Form(None),
+    name: str | None = Form(None),
+    category_id: int | None = Form(None),
+    unit: str | None = Form(None),
+    purchase_price: float | None = Form(None),
+    selling_price: float | None = Form(None),
+    minimum_stock: int | None = Form(None),
+    expiration_date: date | None = Form(None),
+    status: str | None = Form(None),
+    image: UploadFile | None = File(None),
     current_user: dict = Depends(
         require_roles(["owner", "admin"])
     ),
@@ -1067,11 +1144,15 @@ def update_product(
             detail="Produk tidak ditemukan"
         )
 
-    if data.sku is not None and data.sku != product.sku:
+    # ==========================================
+    # VALIDASI SKU
+    # ==========================================
+
+    if sku is not None and sku != product.sku:
         existing_sku = (
             db.query(Product)
             .filter(
-                Product.sku == data.sku,
+                Product.sku == sku,
                 Product.id != product_id
             )
             .first()
@@ -1083,11 +1164,15 @@ def update_product(
                 detail="SKU sudah digunakan"
             )
 
-    if data.barcode is not None and data.barcode != product.barcode:
+    # ==========================================
+    # VALIDASI BARCODE
+    # ==========================================
+
+    if barcode is not None and barcode != product.barcode:
         existing_barcode = (
             db.query(Product)
             .filter(
-                Product.barcode == data.barcode,
+                Product.barcode == barcode,
                 Product.id != product_id
             )
             .first()
@@ -1099,8 +1184,12 @@ def update_product(
                 detail="Barcode sudah digunakan"
             )
 
-    if data.category_id is not None:
-        category = db.get(Category, data.category_id)
+    # ==========================================
+    # VALIDASI KATEGORI
+    # ==========================================
+
+    if category_id is not None:
+        category = db.get(Category, category_id)
 
         if category is None:
             raise HTTPException(
@@ -1108,8 +1197,12 @@ def update_product(
                 detail="Kategori tidak ditemukan"
             )
 
-    if data.status is not None:
-        if data.status not in ["active", "inactive"]:
+    # ==========================================
+    # VALIDASI STATUS
+    # ==========================================
+
+    if status is not None:
+        if status not in ["active", "inactive"]:
             raise HTTPException(
                 status_code=400,
                 detail="Status produk tidak valid"
@@ -1117,87 +1210,148 @@ def update_product(
 
     changes = []
 
-    if data.sku is not None and data.sku != product.sku:
-        changes.append(
-            f"SKU: {product.sku} → {data.sku}"
-        )
-        product.sku = data.sku
+    # ==========================================
+    # UPDATE DATA PRODUK
+    # ==========================================
 
-    if data.barcode is not None and data.barcode != product.barcode:
+    if sku is not None and sku != product.sku:
         changes.append(
-            f"Barcode: {product.barcode} → {data.barcode}"
+            f"SKU: {product.sku} → {sku}"
         )
-        product.barcode = data.barcode
+        product.sku = sku
 
-    if data.name is not None and data.name != product.name:
+    if barcode is not None and barcode != product.barcode:
         changes.append(
-            f"Nama: {product.name} → {data.name}"
+            f"Barcode: {product.barcode} → {barcode}"
         )
-        product.name = data.name
+        product.barcode = barcode
+
+    if name is not None and name != product.name:
+        changes.append(
+            f"Nama: {product.name} → {name}"
+        )
+        product.name = name
 
     if (
-        data.category_id is not None
-        and data.category_id != product.category_id
+        category_id is not None
+        and category_id != product.category_id
     ):
         changes.append(
-            f"Kategori ID: {product.category_id} → {data.category_id}"
+            f"Kategori ID: "
+            f"{product.category_id} → {category_id}"
         )
-        product.category_id = data.category_id
+        product.category_id = category_id
 
-    if data.unit is not None and data.unit != product.unit:
+    if unit is not None and unit != product.unit:
         changes.append(
-            f"Satuan: {product.unit} → {data.unit}"
+            f"Satuan: {product.unit} → {unit}"
         )
-        product.unit = data.unit
+        product.unit = unit
 
     if (
-        data.purchase_price is not None
-        and data.purchase_price != product.purchase_price
+        purchase_price is not None
+        and purchase_price != float(product.purchase_price)
     ):
         changes.append(
-            f"Harga beli: {product.purchase_price} → {data.purchase_price}"
+            f"Harga beli: "
+            f"{product.purchase_price} → {purchase_price}"
         )
-        product.purchase_price = data.purchase_price
+        product.purchase_price = purchase_price
 
     if (
-        data.selling_price is not None
-        and data.selling_price != product.selling_price
+        selling_price is not None
+        and selling_price != float(product.selling_price)
     ):
         changes.append(
-            f"Harga jual: {product.selling_price} → {data.selling_price}"
+            f"Harga jual: "
+            f"{product.selling_price} → {selling_price}"
         )
-        product.selling_price = data.selling_price
+        product.selling_price = selling_price
 
     if (
-        data.minimum_stock is not None
-        and data.minimum_stock != product.minimum_stock
+        minimum_stock is not None
+        and minimum_stock != product.minimum_stock
     ):
         changes.append(
-            f"Minimum stok: {product.minimum_stock} → {data.minimum_stock}"
+            f"Minimum stok: "
+            f"{product.minimum_stock} → {minimum_stock}"
         )
-        product.minimum_stock = data.minimum_stock
+        product.minimum_stock = minimum_stock
 
     if (
-        data.expiration_date is not None
-        and data.expiration_date != product.expiration_date
+        expiration_date is not None
+        and expiration_date != product.expiration_date
     ):
         changes.append(
             f"Tanggal kedaluwarsa: "
-            f"{product.expiration_date} → {data.expiration_date}"
+            f"{product.expiration_date} → {expiration_date}"
         )
-        product.expiration_date = data.expiration_date
+        product.expiration_date = expiration_date
 
-    if data.status is not None and data.status != product.status:
+    if status is not None and status != product.status:
         changes.append(
-            f"Status: {product.status} → {data.status}"
+            f"Status: {product.status} → {status}"
         )
-        product.status = data.status
+        product.status = status
+
+    # ==========================================
+    # UPDATE GAMBAR
+    # ==========================================
+    old_image_url = product.image_url
+
+    if image is not None:
+        allowed_types = [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+        ]
+
+        if image.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail="Format gambar harus JPG, PNG, atau WEBP"
+            )
+
+        extension_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp"
+        }
+
+        extension = extension_map[image.content_type]
+
+        filename = f"{product.id}{extension}"
+
+        file_path = os.path.join(
+            UPLOAD_DIR,
+            filename
+        )
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(
+                image.file,
+                buffer
+            )
+
+        product.image_url = (
+            f"/uploads/products/{filename}"
+        )
+
+        changes.append("Gambar produk diperbarui")
+
+    # ==========================================
+    # JIKA TIDAK ADA PERUBAHAN
+    # ==========================================
 
     if not changes:
         return {
             "success": True,
             "message": "Tidak ada perubahan pada produk"
         }
+
+    # ==========================================
+    # AUDIT LOG
+    # ==========================================
 
     create_audit_log(
         session=db,
@@ -1211,9 +1365,33 @@ def update_product(
         )
     )
 
+    # ==========================================
+    # COMMIT
+    # ==========================================
+
     try:
         db.commit()
         db.refresh(product)
+
+        if image is not None and old_image_url:
+            old_filename = os.path.basename(
+                old_image_url
+            )
+
+            old_file_path = os.path.join(
+                UPLOAD_DIR,
+                old_filename
+            )
+
+            new_filename = os.path.basename(
+                product.image_url
+            )
+
+            if (
+                old_filename != new_filename
+                and os.path.exists(old_file_path)
+            ):
+                os.remove(old_file_path)
 
         return {
             "success": True,
@@ -1225,8 +1403,12 @@ def update_product(
                 "name": product.name,
                 "category_id": product.category_id,
                 "unit": product.unit,
-                "purchase_price": float(product.purchase_price),
-                "selling_price": float(product.selling_price),
+                "purchase_price": float(
+                    product.purchase_price
+                ),
+                "selling_price": float(
+                    product.selling_price
+                ),
                 "current_stock": product.current_stock,
                 "minimum_stock": product.minimum_stock,
                 "expiration_date": (
@@ -1234,18 +1416,24 @@ def update_product(
                     if product.expiration_date
                     else None
                 ),
-                "status": product.status
+                "status": product.status,
+                "image_url": product.image_url
             }
         }
 
     except Exception as e:
         db.rollback()
 
-        print(f"ERROR UPDATE PRODUCT: {e}")
+        print(
+            f"ERROR UPDATE PRODUCT: {e}"
+        )
 
         raise HTTPException(
             status_code=500,
-            detail="Terjadi kesalahan saat memperbarui produk"
+            detail=(
+                "Terjadi kesalahan saat "
+                "memperbarui produk"
+            )
         )
 
 @app.get("/pos/products")
@@ -1275,6 +1463,7 @@ def get_pos_products(
                     product.selling_price
                 ),
                 "current_stock": product.current_stock,
+                "image_url": product.image_url,
                 "status": product.status
             }
             for product in products
@@ -2440,6 +2629,7 @@ def create_transaction(
                 "memproses transaksi"
             )
         )
+    
 @app.get("/transactions")
 def get_transactions(
     current_user: dict = Depends(
@@ -2448,7 +2638,11 @@ def get_transactions(
     db: Session = Depends(get_db)
 ):
     transactions = (
-        db.query(Transaction)
+        db.query(Transaction, User.name)
+        .join(
+            User,
+            User.id == Transaction.cashier_id
+        )
         .order_by(
             Transaction.created_at.desc()
         )
@@ -2464,6 +2658,7 @@ def get_transactions(
                     transaction.transaction_number
                 ),
                 "cashier_id": transaction.cashier_id,
+                "cashier_name": cashier_name,
                 "subtotal": float(
                     transaction.subtotal
                 ),
@@ -2487,7 +2682,7 @@ def get_transactions(
                     transaction.created_at.isoformat()
                 )
             }
-            for transaction in transactions
+            for transaction, cashier_name in transactions
         ]
     }
 
@@ -2672,6 +2867,11 @@ def get_dashboard(
                 "id": transaction.id,
                 "transaction_number": (
                     transaction.transaction_number
+                ),
+                "cashier_name": (
+                    db.query(User.name)
+                    .filter(User.id == transaction.cashier_id)
+                    .scalar()
                 ),
                 "total_amount": float(
                     transaction.total_amount

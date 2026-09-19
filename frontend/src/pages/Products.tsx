@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import api from "../services/api";
+
 import {
   createProduct,
   getProducts,
@@ -39,7 +41,8 @@ function Products() {
   const [minimumStock, setMinimumStock] = useState("0");
   const [expirationDate, setExpirationDate] = useState("");
   const [status, setStatus] = useState("active");
-
+  const [image, setImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   const loadData = async () => {
     try {
@@ -79,6 +82,14 @@ function Products() {
     loadData();
   }, []);
 
+  useEffect(() => {
+    return () => {
+        if (imagePreview?.startsWith("blob:")) {
+        URL.revokeObjectURL(imagePreview);
+        }
+    };
+    }, [imagePreview]);
+
 
   const resetForm = () => {
     setSku("");
@@ -92,61 +103,60 @@ function Products() {
     setMinimumStock("0");
     setExpirationDate("");
     setStatus("active");
+    setImage(null);
+    setImagePreview(null);
     setEditingProduct(null);
   };
 
 
-  const handleSubmit = async (
+ const handleSubmit = async (
     event: React.FormEvent
-  ) => {
+    ) => {
     event.preventDefault();
 
     try {
-      setError("");
+        setError("");
 
-      const data = {
-        sku,
-        barcode: barcode || undefined,
-        name,
-        category_id: Number(categoryId),
-        unit,
-        purchase_price: Number(
-          purchasePrice
-        ),
-        selling_price: Number(
-          sellingPrice
-        ),
-        current_stock: Number(stock),
-        minimum_stock: Number(
-          minimumStock
-        ),
-        expiration_date:
-          expirationDate || undefined,
-        status,
-      };
+        const formData = new FormData();
 
-      if (editingProduct) {
+        formData.append("sku", sku);
+        formData.append("barcode", barcode);
+        formData.append("name", name);
+        formData.append("category_id", categoryId);
+        formData.append("unit", unit);
+        formData.append("purchase_price", purchasePrice);
+        formData.append("selling_price", sellingPrice);
+        formData.append("current_stock", stock);
+        formData.append("minimum_stock", minimumStock);
+        formData.append("expiration_date", expirationDate);
+        formData.append("status", status);
+
+        if (image) {
+        formData.append("image", image);
+        }
+
+        if (editingProduct) {
         await updateProduct(
-          editingProduct.id,
-          data
+            editingProduct.id,
+            formData
         );
-      } else {
-        await createProduct(data);
-      }
+        } else {
+        await createProduct(formData);
+        }
 
-      resetForm();
-      setShowForm(false);
+        resetForm();
+        setShowForm(false);
 
-      await loadData();
+        await loadData();
 
     } catch (error) {
-      console.error(error);
+        console.error(error);
 
-      setError(
+        setError(
         "Gagal menyimpan produk."
-      );
+        );
     }
-  };
+    };
 
 
   const handleEdit = (
@@ -174,9 +184,19 @@ function Products() {
       String(product.minimum_stock)
     );
     setExpirationDate(
-      product.expiration_date ?? ""
+    product.expiration_date ?? ""
     );
     setStatus(product.status);
+
+    setImage(null);
+
+    if (product.image_url) {
+    setImagePreview(
+        `${api.defaults.baseURL}${product.image_url}`
+    );
+    } else {
+    setImagePreview(null);
+    }
 
     setShowForm(true);
   };
@@ -442,7 +462,42 @@ function Products() {
                 </option>
               </select>
             </div>
+            
+            <div className="form-group">
+            <label>Gambar Produk</label>
 
+            {imagePreview && (
+                <div>
+                <img
+                    src={imagePreview}
+                    alt="Preview produk"
+                    className="product-image"
+                />
+                </div>
+            )}
+
+            <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(event) => {
+                const file =
+                    event.target.files?.[0] ?? null;
+
+                setImage(file);
+
+                if (file) {
+                    const previewUrl =
+                    URL.createObjectURL(file);
+
+                    setImagePreview(previewUrl);
+                }
+                }}
+            />
+
+            <small>
+                Format: JPG, PNG, atau WEBP.
+            </small>
+            </div>
 
             <button type="submit">
               {editingProduct
@@ -511,7 +566,36 @@ function Products() {
                     </td>
 
                     <td>
-                      {product.name}
+                    <div className="product-cell">
+                    {product.image_url ? (
+                        <img
+                        src={`${api.defaults.baseURL}${product.image_url}`}
+                        alt={product.name}
+                        className="product-image"
+                        onError={(event) => {
+                            event.currentTarget.style.display = "none";
+
+                            const placeholder =
+                            event.currentTarget.nextElementSibling as HTMLElement | null;
+
+                            if (placeholder) {
+                            placeholder.style.display = "flex";
+                            }
+                        }}
+                        />
+                    ) : null}
+
+                    <div
+                        className="product-placeholder"
+                        style={{
+                        display: product.image_url ? "none" : "flex",
+                        }}
+                    >
+                        {product.name.charAt(0).toUpperCase()}
+                    </div>
+
+                    <span>{product.name}</span>
+                    </div>
                     </td>
 
                     <td>

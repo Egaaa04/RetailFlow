@@ -78,6 +78,11 @@ class Product(Base):
         nullable=False
     )
 
+    image_url: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),
